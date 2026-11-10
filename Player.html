@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Đội Chơi</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+
+<style>
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes flow-dash {
+    to { stroke-dashoffset: -40; }
+  }
+  @keyframes smoke-rise {
+    0% { transform: translateY(0) scale(0.6); opacity: 0.85; }
+    50% { transform: translateY(-22px) translateX(6px) scale(1.15); opacity: 0.5; }
+    100% { transform: translateY(-48px) translateX(-4px) scale(1.7); opacity: 0; }
+  }
+  @keyframes bubble-pop {
+    0% { transform: translateY(0) scale(0.7); opacity: 0.9; }
+    100% { transform: translateY(-28px) scale(1.3); opacity: 0; }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 0.6; transform: scale(0.98); }
+    50% { opacity: 1; transform: scale(1.04); }
+  }
+
+  .anim-spin { animation: spin-slow 5s linear infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-flow { stroke-dasharray: 10 10; animation: flow-dash 0.8s linear infinite; }
+  .anim-smoke-1 { animation: smoke-rise 2.6s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-smoke-2 { animation: smoke-rise 2.6s ease-out infinite 0.9s; transform-box: fill-box; transform-origin: center; }
+  .anim-smoke-3 { animation: smoke-rise 2.6s ease-out infinite 1.8s; transform-box: fill-box; transform-origin: center; }
+  .anim-bubble-1 { animation: bubble-pop 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-bubble-2 { animation: bubble-pop 1.8s ease-out infinite 0.7s; transform-box: fill-box; transform-origin: center; }
+  .anim-glow { animation: pulse-glow 2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+  ::-webkit-scrollbar-thumb { background: #475569; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  
+  body { font-family: 'Inter', sans-serif; background-color: #090d16; color: #f8fafc; overflow-x: hidden; }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ===================== FIREBASE v9 ===================== -->
+<script type="module">
+  const firebaseConfig = {
+    apiKey: "AIzaSyB8mnryzG6V_ueyEkiFKxDwSSRKcZeYmLw",
+    authDomain: "gamemt-70cf3.firebaseapp.com",
+    databaseURL: "https://gamemt-70cf3-default-rtdb.firebaseio.com",
+    projectId: "gamemt-70cf3",
+    storageBucket: "gamemt-70cf3.firebasestorage.app",
+    messagingSenderId: "953971410684",
+    appId: "1:953971410684:web:9aef16a7341d1435aff979",
+    measurementId: "G-9XKEQSCEM3"
+  };
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, push, runTransaction, remove }
+    from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  window.FB = { db, ref, onValue, set, update, push, runTransaction, remove };
+  window.dispatchEvent(new Event("fb-ready"));
+</script>
+
+<!-- ===================== REACT APP ===================== -->
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+const { motion, AnimatePresence } = window.Motion;
+
+const DEFAULT_MAX_TEAMS = 6;
+const DEFAULT_ROUNDS = 5;
+const LOC = "loc";
+const XA = "xa";
+const STATES = { WAITING: "waiting", VOTING: "voting", LOCKED: "locked", FINISHED: "finished" };
+
+const choiceLabel = (c) => (c === LOC ? "Xử lí nước thải" : c === XA ? "Xả nước thải" : "Không chọn");
+const getMaxTeams = (settings) => (settings && settings.maxTeams) || DEFAULT_MAX_TEAMS;
+const getTotalRounds = (settings) => (settings && settings.totalRounds) || DEFAULT_ROUNDS;
+
+function useFirebaseReady() {
+  const [ready, setReady] = useState(!!window.FB);
+  useEffect(() => {
+    if (window.FB) { setReady(true); return; }
+    const h = () => setReady(true);
+    window.addEventListener("fb-ready", h);
+    return () => window.removeEventListener("fb-ready", h);
+  }, []);
+  return ready;
+}
+
+function useGame() {
+  const [gameState, setGameState] = useState(null);
+  const [teams, setTeams] = useState({});
+  const [teamsLoaded, setTeamsLoaded] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [currentRound, setCurrentRound] = useState(0);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const { db, ref, onValue } = window.FB;
+    const onErr = (e) => setError(e.message);
+    const u1 = onValue(ref(db, "gameState"), (s) => setGameState(s.val() || STATES.WAITING), onErr);
+    const u2 = onValue(ref(db, "teams"), (s) => { setTeams(s.val() || {}); setTeamsLoaded(true); }, onErr);
+    const u3 = onValue(ref(db, "settings"), (s) => setSettings(s.val() || {}), onErr);
+    const u4 = onValue(ref(db, "currentRound"), (s) => setCurrentRound(s.val() || 0), onErr);
+    return () => { u1(); u2(); u3(); u4(); };
+  }, []);
+  return {
+    gameState, teams, teamsLoaded, error, currentRound,
+    settingsLoaded: settings !== null,
+    maxTeams: getMaxTeams(settings),
+    totalRounds: getTotalRounds(settings),
+  };
+}
+
+const FactorySVG = ({ type, className = "w-full h-full" }) => {
+  if (type === LOC) {
+    return (
+      <svg viewBox="0 0 260 220" className={className}>
+        <defs>
+          <linearGradient id="ecoWall" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#1e293b" />
+            <stop offset="100%" stopColor="#0f172a" />
+          </linearGradient>
+          <linearGradient id="ecoAccent" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#34d399" />
+            <stop offset="100%" stopColor="#059669" />
+          </linearGradient>
+          <linearGradient id="cleanWater" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#0284c7" />
+            <stop offset="50%" stopColor="#38bdf8" />
+            <stop offset="100%" stopColor="#0284c7" />
+          </linearGradient>
+          <linearGradient id="glassTank" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.45" />
+            <stop offset="50%" stopColor="#bae6fd" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#0284c7" stopOpacity="0.5" />
+          </linearGradient>
+        </defs>
+
+        <rect x="10" y="172" width="240" height="36" rx="12" fill="url(#cleanWater)" />
+        <path d="M 25 186 Q 65 180, 105 186 T 185 186 T 235 186" fill="none" stroke="#bae6fd" strokeWidth="2.5" strokeLinecap="round" className="anim-flow" opacity="0.7" />
+        <path d="M 35 198 Q 85 193, 135 198 T 225 198" fill="none" stroke="#e0f2fe" strokeWidth="1.5" strokeLinecap="round" className="anim-flow" opacity="0.5" />
+
+        <rect x="24" y="160" width="212" height="14" rx="4" fill="#334155" />
+        <rect x="28" y="160" width="204" height="5" rx="2" fill="#64748b" />
+
+        <rect x="38" y="68" width="54" height="92" rx="8" fill="#1e293b" stroke="#475569" strokeWidth="2" />
+        <rect x="44" y="76" width="42" height="76" rx="5" fill="url(#glassTank)" />
+        <rect x="44" y="96" width="42" height="56" rx="4" fill="#0ea5e9" opacity="0.65" />
+        <circle cx="56" cy="140" r="3.5" fill="#e0f2fe" className="anim-bubble-1" />
+        <circle cx="72" cy="145" r="2.5" fill="#e0f2fe" className="anim-bubble-2" />
+        <circle cx="64" cy="132" r="3" fill="#bae6fd" className="anim-bubble-1" />
+        <rect x="34" y="60" width="62" height="10" rx="4" fill="url(#ecoAccent)" />
+
+        <rect x="102" y="82" width="96" height="78" rx="6" fill="url(#ecoWall)" stroke="#334155" strokeWidth="2" />
+        <polygon points="96,82 204,82 194,66 106,66" fill="url(#ecoAccent)" />
+        <rect x="114" y="96" width="20" height="14" rx="2" fill="#34d399" opacity="0.85" />
+        <rect x="140" y="96" width="20" height="14" rx="2" fill="#34d399" opacity="0.85" />
+        <rect x="166" y="96" width="20" height="14" rx="2" fill="#34d399" opacity="0.85" />
+
+        <circle cx="150" cy="135" r="18" fill="#0f172a" stroke="#10b981" strokeWidth="3" />
+        <g className="anim-spin">
+          <line x1="150" y1="120" x2="150" y2="150" stroke="#34d399" strokeWidth="3.5" strokeLinecap="round" />
+          <line x1="135" y1="135" x2="165" y2="135" stroke="#34d399" strokeWidth="3.5" strokeLinecap="round" />
+          <circle cx="150" cy="135" r="5" fill="#ecfdf5" />
+        </g>
+
+        <path d="M 92 115 L 104 115" stroke="#38bdf8" strokeWidth="8" />
+        <path d="M 198 130 L 218 130 L 218 176" fill="none" stroke="#475569" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M 198 130 L 218 130 L 218 178" fill="none" stroke="#38bdf8" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" className="anim-flow" />
+
+        <circle cx="218" cy="178" r="7" fill="#bae6fd" className="anim-glow" />
+        <circle cx="218" cy="152" r="3" fill="#7dd3fc" className="anim-bubble-1" />
+        <circle cx="226" cy="160" r="2.5" fill="#bae6fd" className="anim-bubble-2" />
+      </svg>
+    );
+  }
+
+  if (type === XA) {
+    return (
+      <svg viewBox="0 0 260 220" className={className}>
+        <defs>
+          <linearGradient id="toxWall" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#27272a" />
+            <stop offset="100%" stopColor="#09090b" />
+          </linearGradient>
+          <linearGradient id="toxRiver" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#3f6212" />
+            <stop offset="50%" stopColor="#84cc16" />
+            <stop offset="100%" stopColor="#7f1d1d" />
+          </linearGradient>
+          <linearGradient id="sludge" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#a3e635" />
+            <stop offset="100%" stopColor="#4d7c0f" />
+          </linearGradient>
+        </defs>
+
+        <circle cx="58" cy="44" r="14" fill="#52525b" className="anim-smoke-1" />
+        <circle cx="64" cy="34" r="18" fill="#3f3f46" className="anim-smoke-2" />
+        <circle cx="94" cy="50" r="13" fill="#52525b" className="anim-smoke-2" />
+        <circle cx="90" cy="36" r="16" fill="#27272a" className="anim-smoke-3" />
+
+        <rect x="10" y="172" width="240" height="36" rx="12" fill="url(#toxRiver)" />
+        <path d="M 25 188 Q 75 182, 125 188 T 225 188" fill="none" stroke="#bef264" strokeWidth="2.5" strokeLinecap="round" className="anim-flow" opacity="0.65" />
+
+        <rect x="24" y="160" width="212" height="14" rx="4" fill="#27272a" />
+        <rect x="28" y="160" width="204" height="4" fill="#dc2626" opacity="0.7" />
+
+        <polygon points="46,110 70,110 66,48 50,48" fill="#3f3f46" stroke="#18181b" strokeWidth="1.5" />
+        <rect x="48" y="56" width="20" height="6" fill="#ef4444" />
+        <rect x="49" y="68" width="18" height="6" fill="#ef4444" />
+
+        <polygon points="80,110 104,110 100,56 84,56" fill="#3f3f46" stroke="#18181b" strokeWidth="1.5" />
+        <rect x="82" y="64" width="20" height="6" fill="#ef4444" />
+        <rect x="83" y="76" width="18" height="6" fill="#ef4444" />
+
+        <polygon points="36,160 36,96 72,76 72,96 108,76 108,96 144,76 144,96 192,96 192,160" fill="url(#toxWall)" stroke="#dc2626" strokeWidth="1.5" />
+
+        <rect x="52" y="114" width="22" height="14" rx="2" fill="#ef4444" className="anim-glow" />
+        <rect x="86" y="114" width="22" height="14" rx="2" fill="#f97316" className="anim-glow" />
+        <rect x="120" y="114" width="22" height="14" rx="2" fill="#ef4444" className="anim-glow" />
+
+        <polygon points="166,112 182,140 150,140" fill="#facc15" stroke="#18181b" strokeWidth="2" strokeLinejoin="round" />
+        <text x="166" y="137" fontSize="16" fontWeight="900" fill="#18181b" textAnchor="middle">!</text>
+
+        <path d="M 192 132 L 222 132 L 222 156" fill="none" stroke="#3f3f46" strokeWidth="16" strokeLinecap="butt" />
+        <rect x="211" y="148" width="22" height="8" rx="2" fill="#52525b" />
+
+        <path d="M 215 156 L 229 156 L 233 184 L 211 184 Z" fill="url(#sludge)" />
+        <path d="M 222 156 L 222 184" stroke="#ecfccb" strokeWidth="4" strokeLinecap="round" className="anim-flow" />
+
+        <circle cx="222" cy="184" r="10" fill="#a3e635" className="anim-glow" opacity="0.85" />
+        <circle cx="212" cy="176" r="4" fill="#d9f99d" className="anim-bubble-1" />
+        <circle cx="232" cy="178" r="3.5" fill="#bef264" className="anim-bubble-2" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 260 220" className={className}>
+      <rect x="16" y="172" width="228" height="32" rx="10" fill="#1e293b" />
+      <rect x="28" y="160" width="204" height="12" rx="4" fill="#334155" />
+      <rect x="44" y="76" width="52" height="84" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="2" />
+      <rect x="104" y="88" width="104" height="72" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="2" />
+      <polygon points="98,88 214,88 202,70 110,70" fill="#334155" />
+      <circle cx="156" cy="124" r="22" fill="#0f172a" stroke="#64748b" strokeWidth="2.5" strokeDasharray="5 5" className="anim-spin" />
+      <text x="156" y="132" fontSize="24" fontWeight="900" fill="#94a3b8" textAnchor="middle">?</text>
+    </svg>
+  );
+};
+
+function RoundSummaryShow({ teams, currentRound, onClose, isHost, initialPhase = "loc" }) {
+  const [phase, setPhase] = useState(initialPhase);
+
+  const allTeams = useMemo(() => Object.entries(teams || {}).map(([id, t]) => ({ id, ...t })), [teams]);
+  const locTeams = useMemo(() => allTeams.filter((t) => (t.currentChoice || t.lastChoice) === LOC), [allTeams]);
+  const xaTeams = useMemo(() => allTeams.filter((t) => (t.currentChoice || t.lastChoice) === XA), [allTeams]);
+
+  const [sortedForBars, setSortedForBars] = useState([]);
+  const [applyNewScores, setApplyNewScores] = useState(false);
+
+  // Giữ tham chiếu mới nhất để tránh việc dữ liệu Firebase nhảy làm reset bộ đếm giờ
+  const latestTeamsRef = useRef(allTeams);
+  useEffect(() => { latestTeamsRef.current = allTeams; }, [allTeams]);
+
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
+  useEffect(() => {
+    const currentTeams = latestTeamsRef.current;
+    if (initialPhase === "bars") {
+      const initialOrder = [...currentTeams].sort((a, b) => (b.score || 0) - (a.score || 0));
+      setSortedForBars(initialOrder);
+      setApplyNewScores(true);
+      return;
+    }
+
+    const t1 = setTimeout(() => setPhase("pause"), 2400);
+    const t2 = setTimeout(() => setPhase("xa"), 3600);
+    const t3 = setTimeout(() => {
+      const latest = latestTeamsRef.current;
+      const initialOrder = [...latest].sort((a, b) => {
+        const prevA = (a.score || 0) - (a.lastDelta || 0);
+        const prevB = (b.score || 0) - (b.lastDelta || 0);
+        return prevB - prevA;
+      });
+      setSortedForBars(initialOrder);
+      setPhase("bars");
+    }, 6200);
+
+    const t4 = setTimeout(() => {
+      const latest = latestTeamsRef.current;
+      setApplyNewScores(true);
+      setSortedForBars([...latest].sort((a, b) => (b.score || 0) - (a.score || 0)));
+    }, 7100);
+
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
+  }, [initialPhase]);
+
+  // Nếu chỉ mở Bảng Xếp Hạng thì tự động cập nhật khi có điểm mới
+  useEffect(() => {
+    if (phase === "bars" && applyNewScores) {
+      setSortedForBars([...allTeams].sort((a, b) => (b.score || 0) - (a.score || 0)));
+    }
+  }, [allTeams, phase, applyNewScores]);
+
+  // Tự động đóng cho người chơi sau 6.5 giây khi đã chiếu xong tổng kết
+  useEffect(() => {
+    if (!isHost && phase === "bars" && initialPhase === "loc") {
+      const t = setTimeout(() => {
+        if (onCloseRef.current) onCloseRef.current();
+      }, 6500);
+      return () => clearTimeout(t);
+    }
+  }, [phase, isHost, initialPhase]);
+
+  const maxScore = useMemo(() => {
+    const m = Math.max(...allTeams.map((t) => Math.max(0, t.score || 0)), 100);
+    return m + 50;
+  }, [allTeams]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-4 md:p-8 overflow-y-auto"
+    >
+      <div className="w-full max-w-5xl flex items-center justify-between mb-6">
+        <span className="px-4 py-1.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-extrabold uppercase tracking-wider">
+          Tổng kết Vòng {currentRound}
+        </span>
+        <button
+          onClick={onClose}
+          className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-colors"
+        >
+          Đóng ✕
+        </button>
+      </div>
+
+      <div className="w-full max-w-5xl flex-1 flex flex-col items-center justify-center min-h-[420px]">
+        <AnimatePresence mode="wait">
+          {phase === "loc" && (
+            <motion.div
+              key="stage-loc"
+              initial={{ y: -80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 60, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 200, damping: 22 }}
+              className="w-full flex flex-col items-center"
+            >
+              <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-black text-lg mb-6">
+                <span>✓</span> XỬ LÍ NƯỚC THẢI ({locTeams.length})
+              </div>
+
+              {locTeams.length === 0 ? (
+                <div className="p-12 rounded-3xl bg-slate-900/80 border border-slate-800 text-slate-400 font-bold text-lg">
+                  Không có nhà máy nào
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 w-full">
+                  {locTeams.map((t, idx) => (
+                    <motion.div
+                      key={t.id}
+                      initial={{ y: -50, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      transition={{ delay: idx * 0.12, type: "spring" }}
+                      className="relative bg-gradient-to-b from-emerald-950/80 to-slate-900 border-2 border-emerald-500/50 rounded-3xl p-4 flex flex-col items-center shadow-2xl shadow-emerald-950/50"
+                    >
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ delay: idx * 0.12 + 0.25, type: "spring", bounce: 0.6 }}
+                        className="absolute -top-3 -right-3 w-10 h-10 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center font-black text-xl shadow-lg"
+                      >
+                        ✓
+                      </motion.div>
+                      <div className="text-base font-black text-emerald-200 truncate w-full text-center mb-1">{t.name}</div>
+                      <div className="w-36 h-32">
+                        <FactorySVG type={LOC} />
+                      </div>
+                      <span className="mt-1 text-xs font-extrabold uppercase tracking-wider text-emerald-400">
+                        Xử lí nước thải
+                      </span>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {phase === "pause" && (
+            <motion.div
+              key="stage-pause"
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: [1, 1.06, 1], opacity: 1 }}
+              exit={{ scale: 1.1, opacity: 0 }}
+              transition={{ duration: 0.5 }}
+              className="flex flex-col items-center justify-center p-12 rounded-3xl bg-rose-950/40 border-2 border-rose-500/60 shadow-2xl shadow-rose-950/80 text-center"
+            >
+              <div className="w-20 h-20 rounded-full bg-rose-500/20 border-2 border-rose-500 flex items-center justify-center text-4xl font-black text-rose-400 mb-4 animate-bounce">
+                !
+              </div>
+              <h2 className="text-3xl font-black text-rose-400 uppercase tracking-wider">
+                Kiểm Tra Xả Thải
+              </h2>
+            </motion.div>
+          )}
+
+          {phase === "xa" && (
+            <motion.div
+              key="stage-xa"
+              initial={{ y: -80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 60, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 200, damping: 22 }}
+              className="w-full flex flex-col items-center"
+            >
+              <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-rose-500/20 border border-rose-500/50 text-rose-300 font-black text-lg mb-6">
+                <span>⚠</span> XẢ NƯỚC THẢI ({xaTeams.length})
+              </div>
+
+              {xaTeams.length === 0 ? (
+                <div className="p-12 rounded-3xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-bold text-xl">
+                  Không có nhà máy nào xả nước thải
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 w-full">
+                  {xaTeams.map((t, idx) => (
+                    <motion.div
+                      key={t.id}
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ delay: idx * 0.15, type: "spring", bounce: 0.5 }}
+                      className="relative bg-gradient-to-b from-rose-950/90 to-slate-900 border-2 border-rose-500 rounded-3xl p-4 flex flex-col items-center shadow-2xl shadow-rose-950/80"
+                    >
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ delay: idx * 0.15 + 0.2, type: "spring" }}
+                        className="absolute -top-3 -right-3 w-10 h-10 rounded-full bg-rose-600 text-white flex items-center justify-center font-black text-xl shadow-lg"
+                      >
+                        !
+                      </motion.div>
+                      <div className="text-base font-black text-rose-200 truncate w-full text-center mb-1">{t.name}</div>
+                      <div className="w-36 h-32">
+                        <FactorySVG type={XA} />
+                      </div>
+                      <span className="mt-1 text-xs font-extrabold uppercase tracking-wider text-rose-400">
+                        Xả nước thải
+                      </span>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {phase === "bars" && (
+            <motion.div
+              key="stage-bars"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="w-full max-w-4xl bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-8 shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between mb-4 md:mb-6">
+                <h3 className="text-xl md:text-2xl font-black text-white tracking-tight">
+                  Bảng Xếp Hạng
+                </h3>
+                <span className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Tự động cập nhật
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <AnimatePresence>
+                  {sortedForBars.map((t, index) => {
+                    const c = t.currentChoice || t.lastChoice;
+                    const delta = t.lastDelta !== undefined && t.lastDelta !== null ? t.lastDelta : 0;
+                    const displayScore = applyNewScores ? (t.score || 0) : ((t.score || 0) - delta);
+                    const pct = Math.max(8, Math.min(100, (Math.max(0, displayScore + 100) / (maxScore + 100)) * 100));
+
+                    return (
+                      <motion.div
+                        key={t.id}
+                        layout
+                        transition={{ type: "spring", stiffness: 260, damping: 26 }}
+                        className="bg-slate-950/80 border border-slate-800/90 rounded-2xl p-2.5 md:p-3.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
+                      >
+                        {/* Box trên Mobile, Cột trái trên Desktop */}
+                        <div className="flex items-center gap-3 w-full sm:w-48 shrink-0">
+                          <div className={`w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center font-black text-xs md:text-sm shrink-0 ${
+                            index === 0 ? "bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/30" :
+                            index === 1 ? "bg-slate-300 text-slate-950" :
+                            index === 2 ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"
+                          }`}>
+                            #{index + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-white truncate text-sm md:text-base">{t.name}</div>
+                            <div className={`text-[9px] md:text-[11px] font-bold uppercase truncate ${
+                              c === LOC ? "text-emerald-400" : c === XA ? "text-rose-400" : "text-slate-500"
+                            }`}>
+                              {choiceLabel(c)}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Box dưới Mobile, Cột phải trên Desktop */}
+                        <div className="flex items-center gap-3 w-full sm:flex-1">
+                          {/* Thanh Bar Ngang */}
+                          <div className="flex-1 h-5 md:h-8 bg-slate-900 rounded-lg md:rounded-xl overflow-hidden p-0.5 md:p-1 border border-slate-800/60 flex items-center">
+                            <motion.div
+                              initial={{ width: "8%" }}
+                              animate={{ width: `${pct}%` }}
+                              transition={{ duration: 0.9, ease: "easeOut" }}
+                              className={`h-full rounded md:rounded-lg ${
+                                c === LOC
+                                  ? "bg-gradient-to-r from-emerald-600 to-teal-400"
+                                  : c === XA
+                                  ? "bg-gradient-to-r from-rose-600 to-amber-500"
+                                  : "bg-slate-700"
+                              }`}
+                            />
+                          </div>
+
+                          {/* Huy hiệu điểm số */}
+                          <div className="w-24 md:w-28 text-right shrink-0 flex items-center justify-end gap-1.5 md:gap-2">
+                            {applyNewScores && (
+                              <motion.span
+                                initial={{ scale: 0, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                className={`px-1.5 py-0.5 md:px-2 rounded-md text-[10px] md:text-xs font-black ${
+                                  delta > 0 ? "bg-emerald-500/20 text-emerald-300" :
+                                  delta < 0 ? "bg-rose-500/20 text-rose-300" : "bg-slate-800 text-slate-400"
+                                }`}
+                              >
+                                {delta > 0 ? `+${delta}` : delta}
+                              </motion.span>
+                            )}
+                            <span className="text-lg md:text-xl font-black text-white tabular-nums">
+                              {displayScore}
+                            </span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </div>
+
+              <div className="mt-5 md:mt-6 flex justify-end">
+                <button
+                  onClick={onClose}
+                  className="px-5 py-2.5 md:px-6 md:py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm md:text-base font-bold shadow-lg shadow-indigo-600/30 transition-all"
+                >
+                  Đóng
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
+const LS_KEY = "tragedy_team_id";
+
+const PlayerShell = ({ children }) => (
+  <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col items-center justify-center p-4 selection:bg-emerald-500">
+    {children}
+  </div>
+);
+
+function Player() {
+  const { gameState, teams, teamsLoaded, settingsLoaded, error, currentRound, maxTeams, totalRounds } = useGame();
+  const [teamId, setTeamId] = useState(() => localStorage.getItem(LS_KEY));
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [optimisticChoice, setOptimisticChoice] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryPhase, setSummaryPhase] = useState("loc");
+  const [showRoundIntro, setShowRoundIntro] = useState(false);
+
+  const prevStateRef = useRef(null);
+  const lastIntroRoundRef = useRef(0);
+  const introTimerRef = useRef(null);
+  const cachedTeamRef = useRef(null);
+  const { db, ref, push, runTransaction } = window.FB;
+
+  const [showRulesModal, setShowRulesModal] = useState(false);
+
+  // Lưu bộ nhớ đệm thông tin đội để KHÔNG BAO GIỜ bị chớp về màn hình Đặt Tên Đội khi đang chạy Transaction
+  const liveTeam = teamId && teams ? teams[teamId] : null;
+  if (liveTeam) {
+    cachedTeamRef.current = liveTeam;
+  }
+  const team = liveTeam || (teamId ? cachedTeamRef.current : null);
+
+  // Chỉ xóa đội nếu thực sự bị Quản trò kick hoặc Reset (có độ trễ an toàn 1.2s để bỏ qua xung đột Transaction khi bấm nút)
+  useEffect(() => {
+    if (!teamsLoaded || !teamId || submitting || busy) return;
+    if (!teams[teamId]) {
+      const timer = setTimeout(() => {
+        localStorage.removeItem(LS_KEY);
+        cachedTeamRef.current = null;
+        setTeamId(null);
+        setOptimisticChoice(null);
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [teamsLoaded, teams, teamId, submitting, busy]);
+
+  // Reset trạng thái nút bấm khi sang vòng mới hoặc rời trạng thái VOTING
+  useEffect(() => {
+    if (gameState !== STATES.VOTING) {
+      setSubmitting(false);
+      setOptimisticChoice(null);
+    }
+  }, [gameState, currentRound]);
+
+  // Xử lý tự động kích hoạt Animation tổng kết hoặc Hiệu ứng Mở Vòng X
+  useEffect(() => {
+    if (!gameState) return;
+
+    if (
+      prevStateRef.current === STATES.LOCKED &&
+      (gameState === STATES.WAITING || gameState === STATES.FINISHED) &&
+      currentRound > 0
+    ) {
+      setSummaryPhase("loc");
+      setShowSummaryModal(true);
+    }
+
+    if (gameState === STATES.VOTING) {
+      setShowSummaryModal(false);
+      if (currentRound > 0 && lastIntroRoundRef.current !== currentRound) {
+        lastIntroRoundRef.current = currentRound;
+        setShowRoundIntro(true);
+        if (introTimerRef.current) clearTimeout(introTimerRef.current);
+        introTimerRef.current = setTimeout(() => {
+          setShowRoundIntro(false);
+        }, 1800);
+      }
+    }
+
+    prevStateRef.current = gameState;
+  }, [gameState, currentRound]);
+
+  useEffect(() => {
+    return () => {
+      if (introTimerRef.current) clearTimeout(introTimerRef.current);
+    };
+  }, []);
+
+  // Đăng ký (UNCHANGED FIREBASE TRANSACTION)
+  const register = async (e) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true); setMsg("");
+    try {
+      const newId = push(ref(db, "teams")).key;
+      let reason = "";
+      const res = await runTransaction(ref(db), (cur) => {
+        const root = cur || {};
+        const ts = root.teams || {};
+        const arr = Object.values(ts);
+        const limit = getMaxTeams(root.settings);
+        if (arr.length >= limit) { reason = `Đã đủ ${limit} đội.`; return; }
+        if (arr.some((t) => (t.name || "").toLowerCase() === n.toLowerCase())) { reason = "Tên đội đã tồn tại."; return; }
+        ts[newId] = { name: n, score: 0 };
+        root.teams = ts;
+        return root;
+      });
+      if (res.committed && res.snapshot.child(`teams/${newId}`).exists()) {
+        cachedTeamRef.current = { name: n, score: 0 };
+        localStorage.setItem(LS_KEY, newId);
+        setTeamId(newId);
+      } else { setMsg(reason || "Không đăng ký được."); }
+    } catch (err) { setMsg("Lỗi: " + err.message); }
+    setBusy(false);
+  };
+
+  // Vote (UNCHANGED FIREBASE TRANSACTION)
+  const vote = async (choice) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setOptimisticChoice(choice);
+    setMsg("");
+    try {
+      const res = await runTransaction(ref(db), (cur) => {
+        if (cur === null) return cur;
+        if (cur.gameState !== STATES.VOTING) return;
+        const t = cur.teams && cur.teams[teamId];
+        if (!t || t.currentChoice) return;
+        t.currentChoice = choice;
+        return cur;
+      });
+      const saved = res.snapshot.child(`teams/${teamId}/currentChoice`).val();
+      if (!res.committed || !saved) {
+        setMsg("Không gửi được lựa chọn.");
+        setSubmitting(false);
+        setOptimisticChoice(null);
+      }
+    } catch (err) {
+      setMsg("Lỗi mạng: " + err.message);
+      setSubmitting(false);
+      setOptimisticChoice(null);
+    }
+  };
+
+  if (error) return <PlayerShell><div className="text-rose-400 font-bold">{error}</div></PlayerShell>;
+  if (!teamsLoaded || !gameState || !settingsLoaded) {
+    return <PlayerShell><div className="text-slate-400 font-bold animate-pulse">Đang tải dữ liệu...</div></PlayerShell>;
+  }
+
+  // MÀN HÌNH ĐẶT TÊN ĐỘI CHƠI
+  if (!team) {
+    const full = Object.keys(teams).length >= maxTeams;
+    return (
+      <PlayerShell>
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md bg-slate-900 border border-slate-800 p-8 rounded-3xl shadow-2xl"
+        >
+          <div className="w-40 h-32 mx-auto mb-4">
+            <FactorySVG type={LOC} />
+          </div>
+          <h1 className="text-2xl font-black text-center text-white mb-6">Đặt Tên Đội</h1>
+          <form onSubmit={register} className="space-y-4">
+            <input
+              className="w-full bg-slate-950 border border-slate-700 p-4 rounded-2xl text-white font-bold outline-none focus:border-emerald-500 transition-colors"
+              placeholder="Tên đội..."
+              value={name}
+              maxLength={30}
+              onChange={(e) => setName(e.target.value)}
+              disabled={busy || full}
+            />
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className="w-full p-4 rounded-2xl font-black text-slate-950 bg-gradient-to-r from-emerald-400 to-teal-500 shadow-lg disabled:opacity-40"
+              disabled={busy || full || !name.trim()}
+            >
+              {busy ? "Đang vào..." : full ? "Đã đủ đội" : "Vào Chơi"}
+            </motion.button>
+            {msg && <p className="text-rose-400 text-sm text-center font-bold">{msg}</p>}
+          </form>
+        </motion.div>
+      </PlayerShell>
+    );
+  }
+
+  const rankedTeams = Object.entries(teams)
+    .map(([id, t]) => ({ id, ...t }))
+    .sort((a, b) => (b.score || 0) - (a.score || 0));
+  const myRank = Math.max(1, rankedTeams.findIndex((t) => t.id === teamId) + 1);
+  const activeChoice = team.currentChoice || optimisticChoice;
+
+  return (
+    <PlayerShell>
+      {/* Hiệu ứng Mở Vòng X (Bấm vào cũng tắt ngay nếu muốn thao tác nhanh) */}
+      <AnimatePresence>
+        {showRoundIntro && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.35, filter: "blur(8px)" }}
+            transition={{ duration: 0.35 }}
+            onClick={() => setShowRoundIntro(false)}
+            className="fixed inset-0 z-[60] flex items-center justify-center cursor-pointer backdrop-blur-md bg-slate-950/75"
+          >
+            <div className="text-center select-none">
+              <h1 className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-br from-emerald-300 to-sky-500 drop-shadow-[0_0_30px_rgba(52,211,153,0.5)]">
+                VÒNG {currentRound}
+              </h1>
+              <p className="text-xl md:text-3xl font-bold text-white mt-3 uppercase tracking-widest">Bắt đầu</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showSummaryModal && (
+          <RoundSummaryShow
+            teams={teams}
+            currentRound={currentRound}
+            onClose={() => setShowSummaryModal(false)}
+            isHost={false}
+            initialPhase={summaryPhase}
+          />
+        )}
+      </AnimatePresence>
+
+      <div className="w-full max-w-md flex flex-col gap-5">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 flex items-center justify-between shadow-lg">
+          <div className="text-lg font-black text-white truncate pr-2">{team.name}</div>
+          <div className="flex items-center gap-4 text-right shrink-0">
+            <div>
+              <span className="text-[11px] font-bold uppercase text-slate-400">Vòng</span>
+              <div className="text-base font-black text-sky-400">{currentRound}/{totalRounds}</div>
+            </div>
+            <div>
+              <span className="text-[11px] font-bold uppercase text-slate-400">#{myRank}</span>
+              <div className="text-xl font-black text-emerald-400 tabular-nums">{team.score || 0} đ</div>
+            </div>
+          </div>
+        </div>
+
+        {gameState === STATES.VOTING && (
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
+            {submitting || !!activeChoice ? (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex flex-col items-center text-center py-4"
+              >
+                <div className="w-48 h-40 mb-4">
+                  <FactorySVG type={activeChoice} />
+                </div>
+                <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider mb-3 ${
+                  activeChoice === LOC
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                    : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                }`}>
+                  {choiceLabel(activeChoice)}
+                </span>
+                <h2 className="text-xl font-black text-white">Đã chốt, chờ kết quả...</h2>
+              </motion.div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => vote(LOC)}
+                  className="w-full rounded-3xl p-5 bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-900 border-2 border-emerald-400/80 shadow-xl shadow-emerald-950/60 flex items-center gap-4 text-left"
+                >
+                  <div className="w-28 h-24 shrink-0">
+                    <FactorySVG type={LOC} />
+                  </div>
+                  <div className="text-2xl font-black text-white leading-tight">
+                    Xử lí nước thải
+                  </div>
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => vote(XA)}
+                  className="w-full rounded-3xl p-5 bg-gradient-to-br from-rose-600 via-red-700 to-rose-950 border-2 border-rose-400/80 shadow-xl shadow-rose-950/60 flex items-center gap-4 text-left"
+                >
+                  <div className="w-28 h-24 shrink-0">
+                    <FactorySVG type={XA} />
+                  </div>
+                  <div className="text-2xl font-black text-white leading-tight">
+                    Xả nước thải
+                  </div>
+                </motion.button>
+
+                {msg && <p className="text-rose-400 text-center font-bold text-sm">{msg}</p>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {gameState === STATES.LOCKED && (
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center shadow-2xl flex flex-col items-center">
+            <div className="w-44 h-36 mb-4">
+              <FactorySVG type={activeChoice || "unknown"} />
+            </div>
+            <h2 className="text-xl font-black text-amber-400">Đã khóa vòng</h2>
+            <p className="text-sm text-slate-300 font-semibold mt-1">
+              <b className="text-white">{choiceLabel(activeChoice)}</b>
+            </p>
+          </div>
+        )}
+
+        {(gameState === STATES.WAITING || gameState === STATES.FINISHED) && (
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center shadow-2xl flex flex-col items-center">
+            {currentRound > 0 && team.lastDelta !== undefined && (
+              <div className="w-full mb-5 pb-5 border-b border-slate-800 flex flex-col items-center">
+                <span className="text-xs font-bold uppercase text-slate-400 mb-2">
+                  Vòng {currentRound}
+                </span>
+                <div className="w-40 h-32 mb-2">
+                  <FactorySVG type={team.lastChoice} />
+                </div>
+                <div className="text-base font-extrabold text-white">
+                  {choiceLabel(team.lastChoice)}
+                </div>
+                <div className={`text-3xl font-black mt-1 ${
+                  team.lastDelta > 0 ? "text-emerald-400" : team.lastDelta < 0 ? "text-rose-400" : "text-slate-400"
+                }`}>
+                  {team.lastDelta > 0 ? `+${team.lastDelta}` : team.lastDelta} điểm
+                </div>
+                <button
+                  onClick={() => {
+                    setSummaryPhase("bars");
+                    setShowSummaryModal(true);
+                  }}
+                  className="mt-3 px-4 py-2 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-bold"
+                >
+                  ▶ Bảng Xếp Hạng
+                </button>
+              </div>
+            )}
+
+            {gameState === STATES.FINISHED ? (
+              <div className="w-full">
+                <h3 className="text-lg font-black text-amber-400 mb-3 uppercase">
+                  Bảng Xếp Hạng
+                </h3>
+                <div className="space-y-2 text-left">
+                  {rankedTeams.map((t, i) => (
+                    <div
+                      key={t.id}
+                      className={`p-3 rounded-2xl border flex items-center justify-between font-bold text-sm ${
+                        t.id === teamId
+                          ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-200"
+                          : "bg-slate-950 border-slate-800 text-slate-300"
+                      }`}
+                    >
+                      <span>#{i + 1} {t.name}</span>
+                      <span className="font-black">{t.score || 0} đ</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-slate-400 font-bold text-base py-4 animate-pulse">
+                Chờ mở vòng...
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Nút Quy tắc tính điểm nổi bật (FAB) */}
+      <motion.button
+        initial={{ opacity: 0, scale: 0, rotate: -45 }}
+        animate={{ opacity: 1, scale: 1, rotate: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 20, delay: 0.5 }}
+        whileHover={{ scale: 1.1, rotate: 5 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={() => setShowRulesModal(true)}
+        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-indigo-600 border-2 border-indigo-400/50 flex items-center justify-center shadow-[0_0_20px_rgba(79,70,229,0.5)] z-40 group overflow-hidden"
+      >
+        <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/0 via-white/20 to-indigo-500/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 ease-in-out"></div>
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        {/* Vòng sáng tỏa ra (Ping animation) */}
+        <span className="absolute inset-0 rounded-full border-2 border-indigo-400 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite] opacity-75"></span>
+      </motion.button>
+
+      {/* Modal Quy tắc tính điểm */}
+      <AnimatePresence>
+        {showRulesModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 md:p-8"
+            onClick={() => setShowRulesModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-slate-900 border border-slate-700 rounded-3xl overflow-hidden max-w-4xl w-full shadow-2xl relative"
+              onClick={(e) => e.stopPropagation()} // Ngăn đóng khi click vào trong modal
+            >
+              <button
+                onClick={() => setShowRulesModal(false)}
+                className="absolute top-4 right-4 w-10 h-10 bg-slate-950/50 hover:bg-slate-800 rounded-full flex items-center justify-center text-white transition-colors z-10"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              
+              <div className="p-2 w-full h-auto">
+                 <img 
+                    src="https://files.catbox.moe/sa3c27.jpg" 
+                    alt="Quy Tắc Tính Điểm" 
+                    className="w-full h-auto object-contain rounded-2xl"
+                 />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </PlayerShell>
+  );
+}
+
+function App() {
+  const ready = useFirebaseReady();
+  if (!ready) {
+    return (
+      <div className="min-h-screen bg-[#090d16] flex items-center justify-center text-slate-400 font-bold">
+        Đang tải...
+      </div>
+    );
+  }
+  return <Player />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
