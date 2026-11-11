@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Đội Chơi</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+
+<style>
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes flow-dash {
+    to { stroke-dashoffset: -40; }
+  }
+  @keyframes smoke-rise {
+    0% { transform: translateY(0) scale(0.6); opacity: 0.85; }
+    50% { transform: translateY(-22px) translateX(6px) scale(1.15); opacity: 0.5; }
+    100% { transform: translateY(-48px) translateX(-4px) scale(1.7); opacity: 0; }
+  }
+  @keyframes bubble-pop {
+    0% { transform: translateY(0) scale(0.7); opacity: 0.9; }
+    100% { transform: translateY(-28px) scale(1.3); opacity: 0; }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 0.6; transform: scale(0.98); }
+    50% { opacity: 1; transform: scale(1.04); }
+  }
+
+  .anim-spin { animation: spin-slow 5s linear infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-flow { stroke-dasharray: 10 10; animation: flow-dash 0.8s linear infinite; }
+  .anim-smoke-1 { animation: smoke-rise 2.6s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-smoke-2 { animation: smoke-rise 2.6s ease-out infinite 0.9s; transform-box: fill-box; transform-origin: center; }
+  .anim-smoke-3 { animation: smoke-rise 2.6s ease-out infinite 1.8s; transform-box: fill-box; transform-origin: center; }
+  .anim-bubble-1 { animation: bubble-pop 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .anim-bubble-2 { animation: bubble-pop 1.8s ease-out infinite 0.7s; transform-box: fill-box; transform-origin: center; }
+  .anim-glow { animation: pulse-glow 2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+  ::-webkit-scrollbar-thumb { background: #475569; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  
+  body { font-family: 'Inter', sans-serif; background-color: #090d16; color: #f8fafc; overflow-x: hidden; }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ===================== FIREBASE v9 ===================== -->
+<script type="module">
+  const firebaseConfig = {
+    apiKey: "AIzaSyB8mnryzG6V_ueyEkiFKxDwSSRKcZeYmLw",
+    authDomain: "gamemt-70cf3.firebaseapp.com",
+    databaseURL: "https://gamemt-70cf3-default-rtdb.firebaseio.com",
+    projectId: "gamemt-70cf3",
+    storageBucket: "gamemt-70cf3.firebasestorage.app",
+    messagingSenderId: "953971410684",
+    appId: "1:953971410684:web:9aef16a7341d1435aff979",
+    measurementId: "G-9XKEQSCEM3"
+  };
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, push, runTransaction, remove }
+    from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  window.FB = { db, ref, onValue, set, update, push, runTransaction, remove };
+  window.dispatchEvent(new Event("fb-ready"));
+</script>
+
+<!-- ===================== REACT APP ===================== -->
+<script>
+
+const { useState, useEffect, useMemo, useRef } = React;
+const { motion, AnimatePresence } = window.Motion;
+
+const DEFAULT_MAX_TEAMS = 6;
+const DEFAULT_ROUNDS = 5;
+const LOC = "loc";
+const XA = "xa";
+const STATES = { WAITING: "waiting", VOTING: "voting", LOCKED: "locked", FINISHED: "finished" };
+
+const choiceLabel = (c) => c === LOC ? "Xử lí nước thải" : c === XA ? "Xả nước thải" : "Không chọn";
+const getMaxTeams = (settings) => settings && settings.maxTeams || DEFAULT_MAX_TEAMS;
+const getTotalRounds = (settings) => settings && settings.totalRounds || DEFAULT_ROUNDS;
+
+// Chuẩn hóa danh sách Nhóm 1 -> Nhóm maxTeams kèm thống kê cổ đông
+function buildTeamsList(maxTeams, teamsData, playersData) {
+  const playersArr = Object.entries(playersData || {}).map(([id, p]) => ({ id, ...p }));
+  const list = [];
+  for (let i = 1; i <= maxTeams; i++) {
+    const id = `team_${i}`;
+    const tData = teamsData && teamsData[id] || {};
+    const groupPlayers = playersArr.filter((p) => p.teamId === id);
+    const locVotes = groupPlayers.filter((p) => p.currentChoice === LOC).length;
+    const xaVotes = groupPlayers.filter((p) => p.currentChoice === XA).length;
+    const votedCount = locVotes + xaVotes;
+
+    let previewChoice = null;
+    if (groupPlayers.length > 0) {
+      if (locVotes > xaVotes) previewChoice = LOC;else
+      previewChoice = XA; // Hòa hoặc 0 phiếu -> Luật lòng tham = XẢ
+    }
+
+    list.push({
+      id,
+      groupNumber: i,
+      name: tData.name || `Nhóm ${i}`,
+      score: tData.score || 0,
+      lastChoice: tData.lastChoice || null,
+      lastDelta: tData.lastDelta,
+      memberCount: groupPlayers.length,
+      votedCount,
+      locVotes,
+      xaVotes,
+      currentChoice: previewChoice
+    });
+  }
+  return list;
+}
+
+// Khi vòng đã KHÓA: chỉ dùng phiếu đã chốt (lockedChoices) tại đúng thời điểm khóa.
+function applyLockedChoices(playersData, lockedChoices, gameState) {
+  if (gameState !== STATES.LOCKED) return playersData || {};
+  const lc = lockedChoices || {};
+  const out = {};
+  Object.entries(playersData || {}).forEach(([pid, p]) => {
+    out[pid] = { ...p, currentChoice: lc[pid] || null };
+  });
+  return out;
+}
+
+function useFirebaseReady() {
+  const [ready, setReady] = useState(!!window.FB);
+  useEffect(() => {
+    if (window.FB) {setReady(true);return;}
+    const h = () => setReady(true);
+    window.addEventListener("fb-ready", h);
+    return () => window.removeEventListener("fb-ready", h);
+  }, []);
+  return ready;
+}
+
+function useGame() {
+  const [gameState, setGameState] = useState(null);
+  const [teams, setTeams] = useState({});
+  const [players, setPlayers] = useState({});
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [currentRound, setCurrentRound] = useState(0);
+  const [lockedChoices, setLockedChoices] = useState({});
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const { db, ref, onValue } = window.FB;
+    const onErr = (e) => setError(e.message);
+    const u1 = onValue(ref(db, "gameState"), (s) => setGameState(s.val() || STATES.WAITING), onErr);
+    const u2 = onValue(ref(db, "teams"), (s) => setTeams(s.val() || {}), onErr);
+    const u3 = onValue(ref(db, "players"), (s) => {setPlayers(s.val() || {});setDataLoaded(true);}, onErr);
+    const u4 = onValue(ref(db, "settings"), (s) => setSettings(s.val() || {}), onErr);
+    const u5 = onValue(ref(db, "currentRound"), (s) => setCurrentRound(s.val() || 0), onErr);
+    const u6 = onValue(ref(db, "lockedChoices"), (s) => setLockedChoices(s.val() || {}), onErr);
+    return () => {u1();u2();u3();u4();u5();u6();};
+  }, []);
+  return {
+    gameState, teams, players, lockedChoices, dataLoaded, error, currentRound,
+    settingsLoaded: settings !== null,
+    maxTeams: getMaxTeams(settings),
+    totalRounds: getTotalRounds(settings)
+  };
+}
+
+const FactorySVG = ({ type, className = "w-full h-full" }) => {
+  if (type === LOC) {
+    return (/*#__PURE__*/
+      React.createElement("svg", { viewBox: "0 0 260 220", className: className }, /*#__PURE__*/
+      React.createElement("defs", null, /*#__PURE__*/
+      React.createElement("linearGradient", { id: "ecoWall", x1: "0", y1: "0", x2: "1", y2: "1" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#1e293b" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#0f172a" })
+      ), /*#__PURE__*/
+      React.createElement("linearGradient", { id: "ecoAccent", x1: "0", y1: "0", x2: "0", y2: "1" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#34d399" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#059669" })
+      ), /*#__PURE__*/
+      React.createElement("linearGradient", { id: "cleanWater", x1: "0", y1: "0", x2: "1", y2: "0" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#0284c7" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "50%", stopColor: "#38bdf8" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#0284c7" })
+      ), /*#__PURE__*/
+      React.createElement("linearGradient", { id: "glassTank", x1: "0", y1: "0", x2: "1", y2: "0" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#38bdf8", stopOpacity: "0.45" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "50%", stopColor: "#bae6fd", stopOpacity: "0.2" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#0284c7", stopOpacity: "0.5" })
+      )
+      ), /*#__PURE__*/
+
+      React.createElement("rect", { x: "10", y: "172", width: "240", height: "36", rx: "12", fill: "url(#cleanWater)" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 25 186 Q 65 180, 105 186 T 185 186 T 235 186", fill: "none", stroke: "#bae6fd", strokeWidth: "2.5", strokeLinecap: "round", className: "anim-flow", opacity: "0.7" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 35 198 Q 85 193, 135 198 T 225 198", fill: "none", stroke: "#e0f2fe", strokeWidth: "1.5", strokeLinecap: "round", className: "anim-flow", opacity: "0.5" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "24", y: "160", width: "212", height: "14", rx: "4", fill: "#334155" }), /*#__PURE__*/
+      React.createElement("rect", { x: "28", y: "160", width: "204", height: "5", rx: "2", fill: "#64748b" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "38", y: "68", width: "54", height: "92", rx: "8", fill: "#1e293b", stroke: "#475569", strokeWidth: "2" }), /*#__PURE__*/
+      React.createElement("rect", { x: "44", y: "76", width: "42", height: "76", rx: "5", fill: "url(#glassTank)" }), /*#__PURE__*/
+      React.createElement("rect", { x: "44", y: "96", width: "42", height: "56", rx: "4", fill: "#0ea5e9", opacity: "0.65" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "56", cy: "140", r: "3.5", fill: "#e0f2fe", className: "anim-bubble-1" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "72", cy: "145", r: "2.5", fill: "#e0f2fe", className: "anim-bubble-2" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "64", cy: "132", r: "3", fill: "#bae6fd", className: "anim-bubble-1" }), /*#__PURE__*/
+      React.createElement("rect", { x: "34", y: "60", width: "62", height: "10", rx: "4", fill: "url(#ecoAccent)" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "102", y: "82", width: "96", height: "78", rx: "6", fill: "url(#ecoWall)", stroke: "#334155", strokeWidth: "2" }), /*#__PURE__*/
+      React.createElement("polygon", { points: "96,82 204,82 194,66 106,66", fill: "url(#ecoAccent)" }), /*#__PURE__*/
+      React.createElement("rect", { x: "114", y: "96", width: "20", height: "14", rx: "2", fill: "#34d399", opacity: "0.85" }), /*#__PURE__*/
+      React.createElement("rect", { x: "140", y: "96", width: "20", height: "14", rx: "2", fill: "#34d399", opacity: "0.85" }), /*#__PURE__*/
+      React.createElement("rect", { x: "166", y: "96", width: "20", height: "14", rx: "2", fill: "#34d399", opacity: "0.85" }), /*#__PURE__*/
+
+      React.createElement("circle", { cx: "150", cy: "135", r: "18", fill: "#0f172a", stroke: "#10b981", strokeWidth: "3" }), /*#__PURE__*/
+      React.createElement("g", { className: "anim-spin" }, /*#__PURE__*/
+      React.createElement("line", { x1: "150", y1: "120", x2: "150", y2: "150", stroke: "#34d399", strokeWidth: "3.5", strokeLinecap: "round" }), /*#__PURE__*/
+      React.createElement("line", { x1: "135", y1: "135", x2: "165", y2: "135", stroke: "#34d399", strokeWidth: "3.5", strokeLinecap: "round" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "150", cy: "135", r: "5", fill: "#ecfdf5" })
+      ), /*#__PURE__*/
+
+      React.createElement("path", { d: "M 92 115 L 104 115", stroke: "#38bdf8", strokeWidth: "8" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 198 130 L 218 130 L 218 176", fill: "none", stroke: "#475569", strokeWidth: "14", strokeLinecap: "round", strokeLinejoin: "round" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 198 130 L 218 130 L 218 178", fill: "none", stroke: "#38bdf8", strokeWidth: "6", strokeLinecap: "round", strokeLinejoin: "round", className: "anim-flow" }), /*#__PURE__*/
+
+      React.createElement("circle", { cx: "218", cy: "178", r: "7", fill: "#bae6fd", className: "anim-glow" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "218", cy: "152", r: "3", fill: "#7dd3fc", className: "anim-bubble-1" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "226", cy: "160", r: "2.5", fill: "#bae6fd", className: "anim-bubble-2" })
+      ));
+
+  }
+
+  if (type === XA) {
+    return (/*#__PURE__*/
+      React.createElement("svg", { viewBox: "0 0 260 220", className: className }, /*#__PURE__*/
+      React.createElement("defs", null, /*#__PURE__*/
+      React.createElement("linearGradient", { id: "toxWall", x1: "0", y1: "0", x2: "1", y2: "1" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#27272a" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#09090b" })
+      ), /*#__PURE__*/
+      React.createElement("linearGradient", { id: "toxRiver", x1: "0", y1: "0", x2: "1", y2: "0" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#3f6212" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "50%", stopColor: "#84cc16" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#7f1d1d" })
+      ), /*#__PURE__*/
+      React.createElement("linearGradient", { id: "sludge", x1: "0", y1: "0", x2: "0", y2: "1" }, /*#__PURE__*/
+      React.createElement("stop", { offset: "0%", stopColor: "#a3e635" }), /*#__PURE__*/
+      React.createElement("stop", { offset: "100%", stopColor: "#4d7c0f" })
+      )
+      ), /*#__PURE__*/
+
+      React.createElement("circle", { cx: "58", cy: "44", r: "14", fill: "#52525b", className: "anim-smoke-1" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "64", cy: "34", r: "18", fill: "#3f3f46", className: "anim-smoke-2" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "94", cy: "50", r: "13", fill: "#52525b", className: "anim-smoke-2" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "90", cy: "36", r: "16", fill: "#27272a", className: "anim-smoke-3" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "10", y: "172", width: "240", height: "36", rx: "12", fill: "url(#toxRiver)" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 25 188 Q 75 182, 125 188 T 225 188", fill: "none", stroke: "#bef264", strokeWidth: "2.5", strokeLinecap: "round", className: "anim-flow", opacity: "0.65" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "24", y: "160", width: "212", height: "14", rx: "4", fill: "#27272a" }), /*#__PURE__*/
+      React.createElement("rect", { x: "28", y: "160", width: "204", height: "4", fill: "#dc2626", opacity: "0.7" }), /*#__PURE__*/
+
+      React.createElement("polygon", { points: "46,110 70,110 66,48 50,48", fill: "#3f3f46", stroke: "#18181b", strokeWidth: "1.5" }), /*#__PURE__*/
+      React.createElement("rect", { x: "48", y: "56", width: "20", height: "6", fill: "#ef4444" }), /*#__PURE__*/
+      React.createElement("rect", { x: "49", y: "68", width: "18", height: "6", fill: "#ef4444" }), /*#__PURE__*/
+
+      React.createElement("polygon", { points: "80,110 104,110 100,56 84,56", fill: "#3f3f46", stroke: "#18181b", strokeWidth: "1.5" }), /*#__PURE__*/
+      React.createElement("rect", { x: "82", y: "64", width: "20", height: "6", fill: "#ef4444" }), /*#__PURE__*/
+      React.createElement("rect", { x: "83", y: "76", width: "18", height: "6", fill: "#ef4444" }), /*#__PURE__*/
+
+      React.createElement("polygon", { points: "36,160 36,96 72,76 72,96 108,76 108,96 144,76 144,96 192,96 192,160", fill: "url(#toxWall)", stroke: "#dc2626", strokeWidth: "1.5" }), /*#__PURE__*/
+
+      React.createElement("rect", { x: "52", y: "114", width: "22", height: "14", rx: "2", fill: "#ef4444", className: "anim-glow" }), /*#__PURE__*/
+      React.createElement("rect", { x: "86", y: "114", width: "22", height: "14", rx: "2", fill: "#f97316", className: "anim-glow" }), /*#__PURE__*/
+      React.createElement("rect", { x: "120", y: "114", width: "22", height: "14", rx: "2", fill: "#ef4444", className: "anim-glow" }), /*#__PURE__*/
+
+      React.createElement("polygon", { points: "166,112 182,140 150,140", fill: "#facc15", stroke: "#18181b", strokeWidth: "2", strokeLinejoin: "round" }), /*#__PURE__*/
+      React.createElement("text", { x: "166", y: "137", fontSize: "16", fontWeight: "900", fill: "#18181b", textAnchor: "middle" }, "!"), /*#__PURE__*/
+
+      React.createElement("path", { d: "M 192 132 L 222 132 L 222 156", fill: "none", stroke: "#3f3f46", strokeWidth: "16", strokeLinecap: "butt" }), /*#__PURE__*/
+      React.createElement("rect", { x: "211", y: "148", width: "22", height: "8", rx: "2", fill: "#52525b" }), /*#__PURE__*/
+
+      React.createElement("path", { d: "M 215 156 L 229 156 L 233 184 L 211 184 Z", fill: "url(#sludge)" }), /*#__PURE__*/
+      React.createElement("path", { d: "M 222 156 L 222 184", stroke: "#ecfccb", strokeWidth: "4", strokeLinecap: "round", className: "anim-flow" }), /*#__PURE__*/
+
+      React.createElement("circle", { cx: "222", cy: "184", r: "10", fill: "#a3e635", className: "anim-glow", opacity: "0.85" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "212", cy: "176", r: "4", fill: "#d9f99d", className: "anim-bubble-1" }), /*#__PURE__*/
+      React.createElement("circle", { cx: "232", cy: "178", r: "3.5", fill: "#bef264", className: "anim-bubble-2" })
+      ));
+
+  }
+
+  return (/*#__PURE__*/
+    React.createElement("svg", { viewBox: "0 0 260 220", className: className }, /*#__PURE__*/
+    React.createElement("rect", { x: "16", y: "172", width: "228", height: "32", rx: "10", fill: "#1e293b" }), /*#__PURE__*/
+    React.createElement("rect", { x: "28", y: "160", width: "204", height: "12", rx: "4", fill: "#334155" }), /*#__PURE__*/
+    React.createElement("rect", { x: "44", y: "76", width: "52", height: "84", rx: "6", fill: "#1e293b", stroke: "#475569", strokeWidth: "2" }), /*#__PURE__*/
+    React.createElement("rect", { x: "104", y: "88", width: "104", height: "72", rx: "6", fill: "#1e293b", stroke: "#475569", strokeWidth: "2" }), /*#__PURE__*/
+    React.createElement("polygon", { points: "98,88 214,88 202,70 110,70", fill: "#334155" }), /*#__PURE__*/
+    React.createElement("circle", { cx: "156", cy: "124", r: "22", fill: "#0f172a", stroke: "#64748b", strokeWidth: "2.5", strokeDasharray: "5 5", className: "anim-spin" }), /*#__PURE__*/
+    React.createElement("text", { x: "156", y: "132", fontSize: "24", fontWeight: "900", fill: "#94a3b8", textAnchor: "middle" }, "?")
+    ));
+
+};
+
+function RoundSummaryShow({ teamsList, currentRound, onClose, isHost, initialPhase = "loc" }) {
+  const [phase, setPhase] = useState(initialPhase);
+
+  const activeTeams = useMemo(() => (teamsList || []).filter((t) => t.memberCount > 0 || t.lastChoice), [teamsList]);
+  const locTeams = useMemo(() => activeTeams.filter((t) => t.lastChoice === LOC), [activeTeams]);
+  const xaTeams = useMemo(() => activeTeams.filter((t) => t.lastChoice === XA), [activeTeams]);
+
+  const [sortedForBars, setSortedForBars] = useState([]);
+  const [applyNewScores, setApplyNewScores] = useState(false);
+
+  const latestTeamsRef = useRef(teamsList || []);
+  useEffect(() => {latestTeamsRef.current = teamsList || [];}, [teamsList]);
+
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {onCloseRef.current = onClose;}, [onClose]);
+
+  useEffect(() => {
+    const currentTeams = latestTeamsRef.current;
+    if (initialPhase === "bars") {
+      const initialOrder = [...currentTeams].sort((a, b) => (b.score || 0) - (a.score || 0));
+      setSortedForBars(initialOrder);
+      setApplyNewScores(true);
+      return;
+    }
+
+    const t1 = setTimeout(() => setPhase("pause"), 2400);
+    const t2 = setTimeout(() => setPhase("xa"), 3600);
+    const t3 = setTimeout(() => {
+      const latest = latestTeamsRef.current;
+      const initialOrder = [...latest].sort((a, b) => {
+        const prevA = (a.score || 0) - (a.lastDelta || 0);
+        const prevB = (b.score || 0) - (b.lastDelta || 0);
+        return prevB - prevA;
+      });
+      setSortedForBars(initialOrder);
+      setPhase("bars");
+    }, 6200);
+
+    const t4 = setTimeout(() => {
+      const latest = latestTeamsRef.current;
+      setApplyNewScores(true);
+      setSortedForBars([...latest].sort((a, b) => (b.score || 0) - (a.score || 0)));
+    }, 7100);
+
+    return () => {clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);clearTimeout(t4);};
+  }, [initialPhase]);
+
+  useEffect(() => {
+    if (phase === "bars" && applyNewScores) {
+      setSortedForBars([...(teamsList || [])].sort((a, b) => (b.score || 0) - (a.score || 0)));
+    }
+  }, [teamsList, phase, applyNewScores]);
+
+  useEffect(() => {
+    if (!isHost && phase === "bars" && initialPhase === "loc") {
+      const t = setTimeout(() => {
+        if (onCloseRef.current) onCloseRef.current();
+      }, 6500);
+      return () => clearTimeout(t);
+    }
+  }, [phase, isHost, initialPhase]);
+
+  const maxScore = useMemo(() => {
+    const m = Math.max(...(teamsList || []).map((t) => Math.max(0, t.score || 0)), 100);
+    return m + 50;
+  }, [teamsList]);
+
+  return (/*#__PURE__*/
+    React.createElement(motion.div, {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      exit: { opacity: 0 },
+      className: "fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-4 md:p-8 overflow-y-auto" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "w-full max-w-5xl flex items-center justify-between mb-6" }, /*#__PURE__*/
+    React.createElement("span", { className: "px-4 py-1.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-extrabold uppercase tracking-wider" }, "Tổng kết Vòng ",
+    currentRound
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      onClick: onClose,
+      className: "px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-colors" },
+    "Đóng ✕"
+
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "w-full max-w-5xl flex-1 flex flex-col items-center justify-center min-h-[420px]" }, /*#__PURE__*/
+    React.createElement(AnimatePresence, { mode: "wait" },
+    phase === "loc" && /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: "stage-loc",
+      initial: { y: -80, opacity: 0 },
+      animate: { y: 0, opacity: 1 },
+      exit: { y: 60, opacity: 0 },
+      transition: { type: "spring", stiffness: 200, damping: 22 },
+      className: "w-full flex flex-col items-center" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "inline-flex items-center gap-2 px-5 py-2 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-black text-lg mb-6" }, /*#__PURE__*/
+    React.createElement("span", null, "✓"), " NHÓM XỬ LÍ NƯỚC THẢI (", locTeams.length, ")"
+    ),
+
+    locTeams.length === 0 ? /*#__PURE__*/
+    React.createElement("div", { className: "p-12 rounded-3xl bg-slate-900/80 border border-slate-800 text-slate-400 font-bold text-lg" }, "Không có nhóm nào"
+
+    ) : /*#__PURE__*/
+
+    React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 w-full" },
+    locTeams.map((t, idx) => /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: t.id,
+      initial: { y: -50, opacity: 0 },
+      animate: { y: 0, opacity: 1 },
+      transition: { delay: idx * 0.12, type: "spring" },
+      className: "relative bg-gradient-to-b from-emerald-950/80 to-slate-900 border-2 border-emerald-500/50 rounded-3xl p-4 flex flex-col items-center shadow-2xl shadow-emerald-950/50" }, /*#__PURE__*/
+
+    React.createElement(motion.div, {
+      initial: { scale: 0 },
+      animate: { scale: 1 },
+      transition: { delay: idx * 0.12 + 0.25, type: "spring", bounce: 0.6 },
+      className: "absolute -top-3 -right-3 w-10 h-10 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center font-black text-xl shadow-lg" },
+    "✓"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-base font-black text-emerald-200 truncate w-full text-center mb-1" }, t.name), /*#__PURE__*/
+    React.createElement("div", { className: "w-36 h-32" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: LOC })
+    ), /*#__PURE__*/
+    React.createElement("span", { className: "mt-1 text-xs font-extrabold uppercase tracking-wider text-emerald-400" }, "Xử lí nước thải"
+
+    )
+    )
+    )
+    )
+
+    ),
+
+
+    phase === "pause" && /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: "stage-pause",
+      initial: { scale: 0.85, opacity: 0 },
+      animate: { scale: [1, 1.06, 1], opacity: 1 },
+      exit: { scale: 1.1, opacity: 0 },
+      transition: { duration: 0.5 },
+      className: "flex flex-col items-center justify-center p-12 rounded-3xl bg-rose-950/40 border-2 border-rose-500/60 shadow-2xl shadow-rose-950/80 text-center" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "w-20 h-20 rounded-full bg-rose-500/20 border-2 border-rose-500 flex items-center justify-center text-4xl font-black text-rose-400 mb-4 animate-bounce" }, "!"
+
+    ), /*#__PURE__*/
+    React.createElement("h2", { className: "text-3xl font-black text-rose-400 uppercase tracking-wider" }, "Kiểm Tra Xả Thải"
+
+    )
+    ),
+
+
+    phase === "xa" && /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: "stage-xa",
+      initial: { y: -80, opacity: 0 },
+      animate: { y: 0, opacity: 1 },
+      exit: { y: 60, opacity: 0 },
+      transition: { type: "spring", stiffness: 200, damping: 22 },
+      className: "w-full flex flex-col items-center" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "inline-flex items-center gap-2 px-5 py-2 rounded-full bg-rose-500/20 border border-rose-500/50 text-rose-300 font-black text-lg mb-6" }, /*#__PURE__*/
+    React.createElement("span", null, "⚠"), " NHÓM XẢ NƯỚC THẢI (", xaTeams.length, ")"
+    ),
+
+    xaTeams.length === 0 ? /*#__PURE__*/
+    React.createElement("div", { className: "p-12 rounded-3xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-bold text-xl" }, "Không có nhóm nào xả nước thải"
+
+    ) : /*#__PURE__*/
+
+    React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 w-full" },
+    xaTeams.map((t, idx) => /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: t.id,
+      initial: { scale: 0.8, opacity: 0 },
+      animate: { scale: 1, opacity: 1 },
+      transition: { delay: idx * 0.15, type: "spring", bounce: 0.5 },
+      className: "relative bg-gradient-to-b from-rose-950/90 to-slate-900 border-2 border-rose-500 rounded-3xl p-4 flex flex-col items-center shadow-2xl shadow-rose-950/80" }, /*#__PURE__*/
+
+    React.createElement(motion.div, {
+      initial: { scale: 0 },
+      animate: { scale: 1 },
+      transition: { delay: idx * 0.15 + 0.2, type: "spring" },
+      className: "absolute -top-3 -right-3 w-10 h-10 rounded-full bg-rose-600 text-white flex items-center justify-center font-black text-xl shadow-lg" },
+    "!"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-base font-black text-rose-200 truncate w-full text-center mb-1" }, t.name), /*#__PURE__*/
+    React.createElement("div", { className: "w-36 h-32" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: XA })
+    ), /*#__PURE__*/
+    React.createElement("span", { className: "mt-1 text-xs font-extrabold uppercase tracking-wider text-rose-400" }, "Xả nước thải"
+
+    )
+    )
+    )
+    )
+
+    ),
+
+
+    phase === "bars" && /*#__PURE__*/
+    React.createElement(motion.div, {
+      key: "stage-bars",
+      initial: { opacity: 0, y: 30 },
+      animate: { opacity: 1, y: 0 },
+      className: "w-full max-w-4xl bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-8 shadow-2xl overflow-hidden" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "flex items-center justify-between mb-4 md:mb-6" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-xl md:text-2xl font-black text-white tracking-tight" }, "Bảng Xếp Hạng"
+
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "flex flex-col gap-3" }, /*#__PURE__*/
+    React.createElement(AnimatePresence, null,
+    sortedForBars.map((t, index) => {
+      const c = t.lastChoice;
+      const delta = t.lastDelta !== undefined && t.lastDelta !== null ? t.lastDelta : 0;
+      const displayScore = applyNewScores ? t.score || 0 : (t.score || 0) - delta;
+      const pct = Math.max(8, Math.min(100, Math.max(0, displayScore + 100) / (maxScore + 100) * 100));
+
+      return (/*#__PURE__*/
+        React.createElement(motion.div, {
+          key: t.id,
+          layout: true,
+          transition: { type: "spring", stiffness: 260, damping: 26 },
+          className: "bg-slate-950/80 border border-slate-800/90 rounded-2xl p-2.5 md:p-3.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" }, /*#__PURE__*/
+
+        React.createElement("div", { className: "flex items-center gap-3 w-full sm:w-48 shrink-0" }, /*#__PURE__*/
+        React.createElement("div", { className: `w-8 h-8 md:w-9 md:h-9 rounded-xl flex items-center justify-center font-black text-xs md:text-sm shrink-0 ${
+          index === 0 ? "bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/30" :
+          index === 1 ? "bg-slate-300 text-slate-950" :
+          index === 2 ? "bg-amber-700 text-white" : "bg-slate-800 text-slate-400"}` },
+        "#",
+        index + 1
+        ), /*#__PURE__*/
+        React.createElement("div", { className: "flex-1 min-w-0" }, /*#__PURE__*/
+        React.createElement("div", { className: "font-bold text-white truncate text-sm md:text-base" }, t.name), /*#__PURE__*/
+        React.createElement("div", { className: `text-[9px] md:text-[11px] font-bold uppercase truncate ${
+          c === LOC ? "text-emerald-400" : c === XA ? "text-rose-400" : "text-slate-500"}` },
+
+        choiceLabel(c)
+        )
+        )
+        ), /*#__PURE__*/
+
+        React.createElement("div", { className: "flex items-center gap-3 w-full sm:flex-1" }, /*#__PURE__*/
+        React.createElement("div", { className: "flex-1 h-5 md:h-8 bg-slate-900 rounded-lg md:rounded-xl overflow-hidden p-0.5 md:p-1 border border-slate-800/60 flex items-center" }, /*#__PURE__*/
+        React.createElement(motion.div, {
+          initial: { width: "8%" },
+          animate: { width: `${pct}%` },
+          transition: { duration: 0.9, ease: "easeOut" },
+          className: `h-full rounded md:rounded-lg ${
+          c === LOC ?
+          "bg-gradient-to-r from-emerald-600 to-teal-400" :
+          c === XA ?
+          "bg-gradient-to-r from-rose-600 to-amber-500" :
+          "bg-slate-700"}` }
+
+        )
+        ), /*#__PURE__*/
+
+        React.createElement("div", { className: "w-24 md:w-28 text-right shrink-0 flex items-center justify-end gap-1.5 md:gap-2" },
+        applyNewScores && /*#__PURE__*/
+        React.createElement(motion.span, {
+          initial: { scale: 0, opacity: 0 },
+          animate: { scale: 1, opacity: 1 },
+          className: `px-1.5 py-0.5 md:px-2 rounded-md text-[10px] md:text-xs font-black ${
+          delta > 0 ? "bg-emerald-500/20 text-emerald-300" :
+          delta < 0 ? "bg-rose-500/20 text-rose-300" : "bg-slate-800 text-slate-400"}` },
+
+
+        delta > 0 ? `+${delta}` : delta
+        ), /*#__PURE__*/
+
+        React.createElement("span", { className: "text-lg md:text-xl font-black text-white tabular-nums" },
+        displayScore
+        )
+        )
+        )
+        ));
+
+    })
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "mt-5 md:mt-6 flex justify-end" }, /*#__PURE__*/
+    React.createElement("button", {
+      onClick: onClose,
+      className: "px-5 py-2.5 md:px-6 md:py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm md:text-base font-bold shadow-lg shadow-indigo-600/30 transition-all" },
+    "Đóng"
+
+    )
+    )
+    )
+
+    )
+    )
+    ));
+
+}
+
+const LS_PLAYER_KEY = "shareholder_player_id";
+
+const PlayerShell = ({ children }) => /*#__PURE__*/
+React.createElement("div", { className: "min-h-[100dvh] bg-[#090d16] text-slate-100 flex flex-col items-center justify-center px-3.5 py-5 pb-20 sm:p-6 selection:bg-emerald-500" },
+children
+);
+
+
+function Player() {
+  const { gameState, teams, players: rawPlayers, lockedChoices, dataLoaded, settingsLoaded, error, currentRound, maxTeams, totalRounds } = useGame();
+  const [playerId, setPlayerId] = useState(() => localStorage.getItem(LS_PLAYER_KEY));
+  const [name, setName] = useState("");
+  const [selectedTeam, setSelectedTeam] = useState("team_1");
+  const [busy, setBusy] = useState(false);
+  const [optimisticChoice, setOptimisticChoice] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryPhase, setSummaryPhase] = useState("loc");
+  const [showRoundIntro, setShowRoundIntro] = useState(false);
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [showMembersModal, setShowMembersModal] = useState(false);
+
+  const prevStateRef = useRef(null);
+  const lastIntroRoundRef = useRef(0);
+  const introTimerRef = useRef(null);
+  const cachedPlayerRef = useRef(null);
+  const { db, ref, push, set } = window.FB;
+
+  const players = useMemo(() => applyLockedChoices(rawPlayers, lockedChoices, gameState), [rawPlayers, lockedChoices, gameState]);
+  const teamsList = useMemo(() => buildTeamsList(maxTeams, teams, players), [maxTeams, teams, players]);
+
+  // Bộ nhớ đệm tránh chớp màn hình đăng ký
+  const livePlayer = playerId && players ? players[playerId] : null;
+  if (livePlayer) {
+    cachedPlayerRef.current = livePlayer;
+  }
+  const player = livePlayer || (playerId ? cachedPlayerRef.current : null);
+
+  // Lấy danh sách thành viên trong cùng nhóm (Chuyển lên đây để không vi phạm quy tắc Hooks của React)
+  const myTeamMembers = useMemo(() => {
+    if (!player || !players) return [];
+    return Object.entries(players).
+    map(([id, p]) => ({ id, ...p })).
+    filter((p) => p.teamId === player.teamId).
+    sort((a, b) => a.name.localeCompare(b.name));
+  }, [player, players]);
+
+  // Nếu Chủ tọa Reset toàn bộ game (xóa nhánh players) thì đưa về màn hình đăng ký
+  useEffect(() => {
+    if (!dataLoaded || !playerId || busy) return;
+    if (!players[playerId]) {
+      const timer = setTimeout(() => {
+        localStorage.removeItem(LS_PLAYER_KEY);
+        cachedPlayerRef.current = null;
+        setPlayerId(null);
+        setOptimisticChoice(null);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [dataLoaded, players, playerId, busy]);
+
+  // Đảm bảo nhóm đang chọn không vượt quá maxTeams
+  useEffect(() => {
+    const num = Number((selectedTeam || "").replace("team_", "")) || 1;
+    if (num > maxTeams) setSelectedTeam("team_1");
+  }, [maxTeams, selectedTeam]);
+
+  // Đồng bộ lựa chọn cá nhân khi đổi trạng thái vòng
+  useEffect(() => {
+    if (gameState !== STATES.VOTING) {
+      setOptimisticChoice(null);
+    }
+  }, [gameState, currentRound]);
+
+  // Tự động bật Tổng kết vòng hoặc Mở Vòng X
+  useEffect(() => {
+    if (!gameState) return;
+
+    if (
+    prevStateRef.current === STATES.LOCKED && (
+    gameState === STATES.WAITING || gameState === STATES.FINISHED) &&
+    currentRound > 0)
+    {
+      setSummaryPhase("loc");
+      setShowSummaryModal(true);
+    }
+
+    if (gameState === STATES.VOTING) {
+      setShowSummaryModal(false);
+      if (currentRound > 0 && lastIntroRoundRef.current !== currentRound) {
+        lastIntroRoundRef.current = currentRound;
+        setShowRoundIntro(true);
+        if (introTimerRef.current) clearTimeout(introTimerRef.current);
+        introTimerRef.current = setTimeout(() => {
+          setShowRoundIntro(false);
+        }, 1800);
+      }
+    }
+
+    prevStateRef.current = gameState;
+  }, [gameState, currentRound]);
+
+  useEffect(() => {
+    return () => {
+      if (introTimerRef.current) clearTimeout(introTimerRef.current);
+    };
+  }, []);
+
+  // Đăng ký cổ đông vào Nhóm (Không giới hạn số lượng người/nhóm)
+  const register = async (e) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n || !selectedTeam) return;
+    setBusy(true);setMsg("");
+    try {
+      const newRef = push(ref(db, "players"));
+      const newId = newRef.key;
+      const pData = { name: n, teamId: selectedTeam, currentChoice: null };
+      await set(newRef, pData);
+      cachedPlayerRef.current = pData;
+      localStorage.setItem(LS_PLAYER_KEY, newId);
+      setPlayerId(newId);
+    } catch (err) {
+      setMsg("Lỗi: " + err.message);
+    }
+    setBusy(false);
+  };
+
+  // Bỏ phiếu & ĐỔI Ý LIÊN TỤC thoải mái khi đang ở trạng thái VOTING
+  const vote = async (choice) => {
+    if (gameState !== STATES.VOTING || !playerId) return;
+    setOptimisticChoice(choice);
+    setMsg("");
+    try {
+      await set(ref(db, `players/${playerId}/currentChoice`), choice);
+    } catch (err) {
+      setMsg("Lỗi mạng: " + err.message);
+    }
+  };
+
+  if (error) return /*#__PURE__*/React.createElement(PlayerShell, null, /*#__PURE__*/React.createElement("div", { className: "text-rose-400 font-bold" }, error));
+  if (!dataLoaded || !gameState || !settingsLoaded) {
+    return /*#__PURE__*/React.createElement(PlayerShell, null, /*#__PURE__*/React.createElement("div", { className: "text-slate-400 font-bold animate-pulse" }, "Đang tải dữ liệu..."));
+  }
+
+  // MÀN HÌNH ĐĂNG KÝ CỔ ĐÔNG & CHỌN NHÓM
+  if (!player) {
+    return (/*#__PURE__*/
+      React.createElement(PlayerShell, null, /*#__PURE__*/
+      React.createElement(motion.div, {
+        initial: { opacity: 0, y: 15 },
+        animate: { opacity: 1, y: 0 },
+        className: "w-full max-w-md bg-slate-900 border border-slate-800 p-5 sm:p-8 rounded-3xl shadow-2xl" }, /*#__PURE__*/
+
+      React.createElement("div", { className: "w-28 h-24 sm:w-36 sm:h-28 mx-auto mb-2 sm:mb-3" }, /*#__PURE__*/
+      React.createElement(FactorySVG, { type: LOC })
+      ), /*#__PURE__*/
+      React.createElement("form", { onSubmit: register, className: "space-y-4 sm:space-y-5" }, /*#__PURE__*/
+      React.createElement("div", null, /*#__PURE__*/
+      React.createElement("label", { className: "text-xs font-bold uppercase text-slate-400 block mb-1.5" }, "Tên"), /*#__PURE__*/
+      React.createElement("input", {
+        className: "w-full bg-slate-950 border border-slate-700 p-3.5 sm:p-4 rounded-2xl text-white font-bold outline-none focus:border-emerald-500 transition-colors text-base",
+        placeholder: "Nhập tên...",
+        value: name,
+        maxLength: 30,
+        onChange: (e) => setName(e.target.value),
+        disabled: busy }
+      )
+      ), /*#__PURE__*/
+
+      React.createElement("div", null, /*#__PURE__*/
+      React.createElement("label", { className: "text-xs font-bold uppercase text-slate-400 block mb-1.5" }, "Chọn Nhóm"
+
+      ), /*#__PURE__*/
+      React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-0.5" },
+      teamsList.map((t) => {
+        const isSel = selectedTeam === t.id;
+        return (/*#__PURE__*/
+          React.createElement("button", {
+            type: "button",
+            key: t.id,
+            onClick: () => setSelectedTeam(t.id),
+            className: `p-2.5 sm:p-3 rounded-2xl border-2 text-left transition-all flex flex-col justify-between ${
+            isSel ?
+            "bg-emerald-500/20 border-emerald-400 text-white shadow-lg shadow-emerald-500/20" :
+            "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"}` }, /*#__PURE__*/
+
+
+          React.createElement("div", { className: "font-black text-xs sm:text-sm text-white truncate" }, t.name), /*#__PURE__*/
+          React.createElement("div", { className: "text-[10px] sm:text-[11px] font-bold text-emerald-400 mt-0.5" },
+          t.memberCount, " thành viên"
+          )
+          ));
+
+      })
+      )
+      ), /*#__PURE__*/
+
+      React.createElement(motion.button, {
+        whileHover: { scale: 1.02 },
+        whileTap: { scale: 0.98 },
+        className: "w-full p-3.5 sm:p-4 rounded-2xl font-black text-slate-950 bg-gradient-to-r from-emerald-400 to-teal-500 shadow-lg disabled:opacity-40 text-base",
+        disabled: busy || !name.trim() },
+
+      busy ? "Đang vào..." : "Vào Game"
+      ),
+      msg && /*#__PURE__*/React.createElement("p", { className: "text-rose-400 text-xs sm:text-sm text-center font-bold" }, msg)
+      )
+      )
+      ));
+
+  }
+
+  const myTeam = teamsList.find((t) => t.id === player.teamId) || teamsList[0];
+  const rankedTeams = [...teamsList].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const myRank = Math.max(1, rankedTeams.findIndex((t) => t.id === myTeam.id) + 1);
+  const activeChoice = optimisticChoice || player.currentChoice;
+
+  return (/*#__PURE__*/
+    React.createElement(PlayerShell, null, /*#__PURE__*/
+
+    React.createElement(AnimatePresence, null,
+    showRoundIntro && /*#__PURE__*/
+    React.createElement(motion.div, {
+      initial: { opacity: 0, scale: 0.6 },
+      animate: { opacity: 1, scale: 1 },
+      exit: { opacity: 0, scale: 1.35, filter: "blur(8px)" },
+      transition: { duration: 0.35 },
+      onClick: () => setShowRoundIntro(false),
+      className: "fixed inset-0 z-[60] flex items-center justify-center cursor-pointer backdrop-blur-md bg-slate-950/75" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "text-center select-none" }, /*#__PURE__*/
+    React.createElement("h1", { className: "text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-br from-emerald-300 to-sky-500 drop-shadow-[0_0_30px_rgba(52,211,153,0.5)]" }, "VÒNG ",
+    currentRound
+    ), /*#__PURE__*/
+    React.createElement("p", { className: "text-xl md:text-3xl font-bold text-white mt-3 uppercase tracking-widest" }, "Bắt đầu")
+    )
+    )
+
+    ), /*#__PURE__*/
+
+    React.createElement(AnimatePresence, null,
+    showSummaryModal && /*#__PURE__*/
+    React.createElement(RoundSummaryShow, {
+      teamsList: teamsList,
+      currentRound: currentRound,
+      onClose: () => setShowSummaryModal(false),
+      isHost: false,
+      initialPhase: summaryPhase }
+    )
+
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "w-full max-w-md flex flex-col gap-3.5 sm:gap-5" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 flex items-center justify-between shadow-lg" }, /*#__PURE__*/
+    React.createElement("div", { className: "min-w-0 pr-2" }, /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setShowMembersModal(true),
+      className: "text-[11px] sm:text-xs font-extrabold uppercase text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1 text-left mb-0.5 outline-none" }, /*#__PURE__*/
+
+    React.createElement("span", { className: "truncate" }, myTeam.name, " (", myTeam.memberCount, " thành viên)"), /*#__PURE__*/
+    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-3.5 w-3.5 shrink-0", viewBox: "0 0 20 20", fill: "currentColor" }, /*#__PURE__*/
+    React.createElement("path", { d: "M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" })
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-base sm:text-lg font-black text-white truncate" }, player.name)
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex items-center gap-3 sm:gap-4 text-right shrink-0" }, /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("span", { className: "text-[10px] sm:text-[11px] font-bold uppercase text-slate-400" }, "Vòng"), /*#__PURE__*/
+    React.createElement("div", { className: "text-sm sm:text-base font-black text-sky-400" }, currentRound, "/", totalRounds)
+    ), /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("span", { className: "text-[10px] sm:text-[11px] font-bold uppercase text-slate-400" }, "#", myRank), /*#__PURE__*/
+    React.createElement("div", { className: "text-lg sm:text-xl font-black text-emerald-400 tabular-nums" }, myTeam.score || 0, " đ")
+    )
+    )
+    ),
+
+
+    gameState === STATES.VOTING && /*#__PURE__*/
+    React.createElement("div", { className: "bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 shadow-2xl flex flex-col gap-3 sm:gap-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "flex items-center justify-between px-1" }, /*#__PURE__*/
+    React.createElement("span", { className: "text-[11px] sm:text-xs font-extrabold uppercase tracking-wider text-slate-400" },
+    myTeam.name
+    ), /*#__PURE__*/
+    React.createElement("span", { className: "text-[11px] sm:text-xs font-black text-amber-400" }, "Đã chọn: ",
+    myTeam.votedCount, "/", myTeam.memberCount
+    )
+    ), /*#__PURE__*/
+
+
+    React.createElement(motion.button, {
+      whileTap: { scale: 0.96 },
+      onClick: () => vote(LOC),
+      className: `w-full rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-900 transition-all flex items-center gap-3 sm:gap-4 text-left relative overflow-hidden ${
+      activeChoice === LOC ?
+      "border-4 border-white ring-4 ring-emerald-400/50 shadow-[0_0_25px_rgba(52,211,153,0.45)] scale-[1.01]" :
+      activeChoice === XA ?
+      "border-2 border-emerald-500/30 opacity-60 hover:opacity-90" :
+      "border-2 border-emerald-400/80 shadow-xl"}` },
+
+
+    activeChoice === LOC && /*#__PURE__*/
+    React.createElement("span", { className: "absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-white text-slate-950 font-black text-[10px] uppercase shadow" }, "✓"
+
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "w-20 h-16 sm:w-24 sm:h-20 shrink-0" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: LOC })
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "min-w-0" }, /*#__PURE__*/
+    React.createElement("div", { className: "text-xl sm:text-2xl font-black text-white leading-tight" }, "Xử lí nước thải"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-xs font-bold text-emerald-200 mt-1" },
+    myTeam.locVotes, " phiếu"
+    )
+    )
+    ), /*#__PURE__*/
+
+
+    React.createElement(motion.button, {
+      whileTap: { scale: 0.96 },
+      onClick: () => vote(XA),
+      className: `w-full rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 bg-gradient-to-br from-rose-600 via-red-700 to-rose-950 transition-all flex items-center gap-3 sm:gap-4 text-left relative overflow-hidden ${
+      activeChoice === XA ?
+      "border-4 border-white ring-4 ring-rose-400/50 shadow-[0_0_25px_rgba(244,63,94,0.45)] scale-[1.01]" :
+      activeChoice === LOC ?
+      "border-2 border-rose-500/30 opacity-60 hover:opacity-90" :
+      "border-2 border-rose-400/80 shadow-xl"}` },
+
+
+    activeChoice === XA && /*#__PURE__*/
+    React.createElement("span", { className: "absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-white text-slate-950 font-black text-[10px] uppercase shadow" }, "✓"
+
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "w-20 h-16 sm:w-24 sm:h-20 shrink-0" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: XA })
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "min-w-0" }, /*#__PURE__*/
+    React.createElement("div", { className: "text-xl sm:text-2xl font-black text-white leading-tight" }, "Xả nước thải"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-xs font-bold text-rose-200 mt-1" },
+    myTeam.xaVotes, " phiếu"
+    )
+    )
+    ),
+
+    msg && /*#__PURE__*/React.createElement("p", { className: "text-rose-400 text-center font-bold text-xs sm:text-sm" }, msg)
+    ),
+
+
+
+    gameState === STATES.LOCKED && /*#__PURE__*/
+    React.createElement("div", { className: "bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl p-6 sm:p-8 text-center shadow-2xl flex flex-col items-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "w-36 h-28 sm:w-44 sm:h-36 mb-3 sm:mb-4" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: activeChoice || "unknown" })
+    ), /*#__PURE__*/
+    React.createElement("h2", { className: "text-lg sm:text-xl font-black text-amber-400" }, "Đã khóa vòng"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm text-slate-300 font-semibold mt-1" }, /*#__PURE__*/
+    React.createElement("b", { className: "text-white" }, choiceLabel(activeChoice))
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "mt-3 px-3.5 py-1.5 rounded-full bg-slate-950 border border-slate-800 text-[11px] sm:text-xs font-bold text-slate-400" },
+    myTeam.name, ": ", myTeam.locVotes, " Xử lí / ", myTeam.xaVotes, " Xả"
+    )
+    ),
+
+
+
+    (gameState === STATES.WAITING || gameState === STATES.FINISHED) && /*#__PURE__*/
+    React.createElement("div", { className: "bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl p-5 sm:p-6 text-center shadow-2xl flex flex-col items-center" },
+    currentRound > 0 && myTeam.lastDelta !== undefined && /*#__PURE__*/
+    React.createElement("div", { className: "w-full mb-4 pb-4 sm:mb-5 sm:pb-5 border-b border-slate-800 flex flex-col items-center" }, /*#__PURE__*/
+    React.createElement("span", { className: "text-[11px] sm:text-xs font-bold uppercase text-slate-400 mb-1.5" },
+    myTeam.name, " - Vòng ", currentRound
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "w-32 h-26 sm:w-40 sm:h-32 mb-1.5" }, /*#__PURE__*/
+    React.createElement(FactorySVG, { type: myTeam.lastChoice })
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "text-sm sm:text-base font-extrabold text-white" },
+    choiceLabel(myTeam.lastChoice)
+    ), /*#__PURE__*/
+    React.createElement("div", { className: `text-2xl sm:text-3xl font-black mt-0.5 ${
+      myTeam.lastDelta > 0 ? "text-emerald-400" : myTeam.lastDelta < 0 ? "text-rose-400" : "text-slate-400"}` },
+
+    myTeam.lastDelta > 0 ? `+${myTeam.lastDelta}` : myTeam.lastDelta, " điểm"
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => {
+        setSummaryPhase("bars");
+        setShowSummaryModal(true);
+      },
+      className: "mt-3 px-4 py-2 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-bold" },
+    "▶ Bảng Xếp Hạng"
+
+    )
+    ),
+
+
+    gameState === STATES.FINISHED ? /*#__PURE__*/
+    React.createElement("div", { className: "w-full" }, /*#__PURE__*/
+    React.createElement("h3", { className: "text-base sm:text-lg font-black text-amber-400 mb-3 uppercase" }, "Bảng Xếp Hạng"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "space-y-2 text-left" },
+    rankedTeams.map((t, i) => /*#__PURE__*/
+    React.createElement("div", {
+      key: t.id,
+      className: `p-2.5 sm:p-3 rounded-2xl border flex items-center justify-between font-bold text-xs sm:text-sm ${
+      t.id === myTeam.id ?
+      "bg-emerald-500/20 border-emerald-500/50 text-emerald-200" :
+      "bg-slate-950 border-slate-800 text-slate-300"}` }, /*#__PURE__*/
+
+
+    React.createElement("span", null, "#", i + 1, " ", t.name, " (", t.memberCount, " TV)"), /*#__PURE__*/
+    React.createElement("span", { className: "font-black" }, t.score || 0, " đ")
+    )
+    )
+    )
+    ) : /*#__PURE__*/
+
+    React.createElement("p", { className: "text-slate-400 font-bold text-sm sm:text-base py-3 animate-pulse" }, "Đang chờ mở vòng..."
+
+    )
+
+    )
+
+    ), /*#__PURE__*/
+
+
+    React.createElement(motion.button, {
+      initial: { opacity: 0, scale: 0, rotate: -45 },
+      animate: { opacity: 1, scale: 1, rotate: 0 },
+      transition: { type: "spring", stiffness: 260, damping: 20, delay: 0.5 },
+      whileHover: { scale: 1.1, rotate: 5 },
+      whileTap: { scale: 0.9 },
+      onClick: () => setShowRulesModal(true),
+      className: "fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-indigo-600 border-2 border-indigo-400/50 flex items-center justify-center shadow-[0_0_20px_rgba(79,70,229,0.5)] z-40 group overflow-hidden" }, /*#__PURE__*/
+
+    React.createElement("div", { className: "absolute inset-0 bg-gradient-to-tr from-indigo-500/0 via-white/20 to-indigo-500/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 ease-in-out" }), /*#__PURE__*/
+    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-6 w-6 sm:h-7 sm:w-7 text-white", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2.5 }, /*#__PURE__*/
+    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" })
+    ), /*#__PURE__*/
+    React.createElement("span", { className: "absolute inset-0 rounded-full border-2 border-indigo-400 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite] opacity-75" })
+    ), /*#__PURE__*/
+
+
+    React.createElement(AnimatePresence, null,
+    showRulesModal && /*#__PURE__*/
+    React.createElement(motion.div, {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      exit: { opacity: 0 },
+      className: "fixed inset-0 z-[70] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-6 md:p-8",
+      onClick: () => setShowRulesModal(false) }, /*#__PURE__*/
+
+    React.createElement(motion.div, {
+      initial: { scale: 0.92, y: 20 },
+      animate: { scale: 1, y: 0 },
+      exit: { scale: 0.92, y: 20 },
+      transition: { type: "spring", damping: 25, stiffness: 300 },
+      className: "bg-slate-900 border border-slate-700 rounded-2xl sm:rounded-3xl overflow-hidden max-w-4xl w-full shadow-2xl relative flex flex-col max-h-[90dvh]",
+      onClick: (e) => e.stopPropagation() }, /*#__PURE__*/
+
+
+    React.createElement("div", { className: "flex items-center justify-between px-4 py-3 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-900/95 shrink-0" }, /*#__PURE__*/
+    React.createElement("h2", { className: "text-lg sm:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-sky-400" }, "LUẬT CHƠI & BIỂU QUYẾT"
+
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setShowRulesModal(false),
+      className: "w-8 h-8 sm:w-9 sm:h-9 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-white transition-colors shrink-0" }, /*#__PURE__*/
+
+    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 }, /*#__PURE__*/
+    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M6 18L18 6M6 6l12 12" })
+    )
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "p-3.5 sm:p-6 md:p-8 w-full overflow-y-auto space-y-5 sm:space-y-7" }, /*#__PURE__*/
+
+    React.createElement("p", { className: "text-slate-300 font-semibold text-xs sm:text-sm md:text-base text-center leading-relaxed max-w-2xl mx-auto" }, "Bạn là một thành viên của một tập đoàn hóa chất...", /*#__PURE__*/
+    React.createElement("br", null), "Hãy cùng nhóm của mình đưa ra quyết định để tối đa hóa lợi nhuận nhưng phải đối mặt với hậu quả môi trường!"
+
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h3", { className: "text-xs sm:text-base font-black text-slate-400 text-center mb-2.5 sm:mb-4 uppercase tracking-widest" }, "Hai Lựa Chọn"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "bg-emerald-950/40 border border-emerald-500/50 rounded-2xl p-3 sm:p-5 flex sm:flex-col items-center gap-3 sm:gap-0 text-left sm:text-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "w-16 h-14 sm:w-24 sm:h-20 shrink-0 sm:mb-3" }, /*#__PURE__*/React.createElement(FactorySVG, { type: LOC })), /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h4", { className: "text-sm sm:text-lg font-black text-emerald-400 mb-0.5 sm:mb-1.5" }, "XỬ LÝ NƯỚC THẢI"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm font-semibold text-emerald-100/80" }, "Bảo vệ môi trường, chi phí cao.")
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "bg-rose-950/40 border border-rose-500/50 rounded-2xl p-3 sm:p-5 flex sm:flex-col items-center gap-3 sm:gap-0 text-left sm:text-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "w-16 h-14 sm:w-24 sm:h-20 shrink-0 sm:mb-3" }, /*#__PURE__*/React.createElement(FactorySVG, { type: XA })), /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h4", { className: "text-sm sm:text-lg font-black text-rose-400 mb-0.5 sm:mb-1.5" }, "XẢ NƯỚC THẢI"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm font-semibold text-rose-100/80" }, "Tiết kiệm chi phí, tối đa lợi nhuận trước mắt.")
+    )
+    )
+    )
+    ), /*#__PURE__*/
+
+
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h3", { className: "text-xs sm:text-base font-black text-slate-400 text-center mb-2.5 sm:mb-4 uppercase tracking-widest" }, "Phương Thức Biểu Quyết"
+
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-2.5 sm:gap-4" }, /*#__PURE__*/
+    React.createElement("div", { className: "bg-slate-800/50 border border-slate-700 p-3 sm:p-4 rounded-xl flex md:flex-col items-center gap-3 md:gap-2 text-left md:text-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "text-2xl sm:text-3xl shrink-0" }, "🔄"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm font-bold text-slate-300" }, "Mỗi thành viên được tự do chọn & ĐỔI Ý liên tục trong lúc vòng đang mở.")
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "bg-slate-800/50 border border-slate-700 p-3 sm:p-4 rounded-xl flex md:flex-col items-center gap-3 md:gap-2 text-left md:text-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "text-2xl sm:text-3xl shrink-0" }, "⚖️"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm font-bold text-slate-300" }, "Ý kiến đa số (lớn hơn 50%) sẽ quyết định hành động của cả nhóm.")
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "bg-amber-950/30 border border-amber-500/40 p-3 sm:p-4 rounded-xl flex md:flex-col items-center gap-3 md:gap-2 text-left md:text-center" }, /*#__PURE__*/
+    React.createElement("div", { className: "text-2xl sm:text-3xl shrink-0" }, "⚠️"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs sm:text-sm font-bold text-amber-200/90" }, "Nếu Hòa (50/50) hoặc không ai vote, nhóm sẽ mặc định chốt XẢ NƯỚC THẢI.")
+    )
+    )
+    ), /*#__PURE__*/
+
+    React.createElement("div", { className: "w-full h-px bg-slate-700/50" }), /*#__PURE__*/
+
+
+    React.createElement("img", {
+      src: "https://files.catbox.moe/sa3c27.jpg",
+      alt: "Quy Tắc Tính Điểm",
+      className: "w-full h-auto object-contain rounded-xl sm:rounded-2xl shadow-xl" }
+    )
+    )
+    )
+    )
+
+    ), /*#__PURE__*/
+
+
+    React.createElement(AnimatePresence, null,
+    showMembersModal && /*#__PURE__*/
+    React.createElement(motion.div, {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      exit: { opacity: 0 },
+      className: "fixed inset-0 z-[75] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4",
+      onClick: () => setShowMembersModal(false) }, /*#__PURE__*/
+
+    React.createElement(motion.div, {
+      initial: { scale: 0.9, y: 20 },
+      animate: { scale: 1, y: 0 },
+      exit: { scale: 0.9, y: 20 },
+      transition: { type: "spring", damping: 25, stiffness: 300 },
+      className: "bg-slate-900 border border-slate-700 rounded-3xl overflow-hidden max-w-sm w-full shadow-2xl relative flex flex-col max-h-[80vh]",
+      onClick: (e) => e.stopPropagation() }, /*#__PURE__*/
+
+    React.createElement("div", { className: "p-5 border-b border-slate-800 flex items-center justify-between bg-slate-800/40" }, /*#__PURE__*/
+    React.createElement("div", null, /*#__PURE__*/
+    React.createElement("h3", { className: "text-lg font-black text-white" }, "Thành Viên Nhóm"), /*#__PURE__*/
+    React.createElement("p", { className: "text-xs font-bold text-emerald-400" }, myTeam.name, " - ", myTeam.memberCount, " người")
+    ), /*#__PURE__*/
+    React.createElement("button", {
+      onClick: () => setShowMembersModal(false),
+      className: "w-8 h-8 bg-slate-950/50 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-300 transition-colors" }, /*#__PURE__*/
+
+    React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", className: "h-5 w-5", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 2 }, /*#__PURE__*/
+    React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M6 18L18 6M6 6l12 12" })
+    )
+    )
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "p-2 overflow-y-auto flex-1" }, /*#__PURE__*/
+    React.createElement("ul", { className: "space-y-1.5 p-2" },
+    myTeamMembers.map((m) => /*#__PURE__*/
+    React.createElement("li", { key: m.id, className: `p-3 rounded-2xl flex items-center gap-3 transition-colors ${m.id === playerId ? 'bg-emerald-500/15 border border-emerald-500/30' : 'bg-slate-950/50 border border-slate-800 hover:bg-slate-800/50'}` }, /*#__PURE__*/
+    React.createElement("div", { className: `w-9 h-9 rounded-full flex items-center justify-center font-black text-sm shrink-0 ${m.id === playerId ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-400'}` },
+    m.name.charAt(0).toUpperCase()
+    ), /*#__PURE__*/
+    React.createElement("div", { className: "flex-1 min-w-0" }, /*#__PURE__*/
+    React.createElement("div", { className: `font-bold truncate text-sm ${m.id === playerId ? 'text-emerald-400' : 'text-slate-200'}` },
+    m.name, " ", m.id === playerId && /*#__PURE__*/React.createElement("span", { className: "text-xs opacity-75" }, "(Bạn)")
+    )
+    )
+    )
+    )
+    )
+    )
+    )
+    )
+
+    )
+    ));
+
+}
+
+function App() {
+  const ready = useFirebaseReady();
+  if (!ready) {
+    return (/*#__PURE__*/
+      React.createElement("div", { className: "min-h-screen bg-[#090d16] flex items-center justify-center text-slate-400 font-bold" }, "Đang tải..."
+
+      ));
+
+  }
+  return /*#__PURE__*/React.createElement(Player, null);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
+</script>
+</body>
+</html>
